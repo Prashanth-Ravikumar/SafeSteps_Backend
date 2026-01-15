@@ -403,3 +403,92 @@ export const getTriggerStats = async (req, res) => {
     });
   }
 };
+
+// @desc    Create emergency trigger from device (uses common device secret)
+// @route   POST /api/triggers/device-trigger
+// @access  Public (Device authenticated via common secret)
+export const createTriggerFromDevice = async (req, res) => {
+  try {
+    const { deviceId, location, description, priority } = req.body;
+
+    // Verify device exists
+    const device = await Device.findOne({ deviceId });
+
+    if (!device) {
+      return res.status(404).json({
+        success: false,
+        message: "Device not found",
+      });
+    }
+
+    // Check if device is assigned
+    if (!device.assignedTo) {
+      return res.status(400).json({
+        success: false,
+        message: "Device is not assigned to any user",
+      });
+    }
+
+    // Create trigger
+    const trigger = await Trigger.create({
+      triggeredBy: device.assignedTo,
+      device: device._id,
+      location: {
+        type: "Point",
+        coordinates: location.coordinates,
+        address: location.address,
+      },
+      description: description || "Emergency triggered from device",
+      priority: priority || "critical",
+      status: "active",
+      triggerType: "automatic",
+      batteryLevel: device.batteryLevel,
+    });
+
+    // Get all active responders
+    const responders = await User.find({
+      role: "responder",
+      isActive: true,
+    });
+
+    // Create response records for all responders
+    const responsePromises = responders.map((responder) =>
+      Response.create({
+        trigger: trigger._id,
+        responder: responder._id,
+        status: "notified",
+      })
+    );
+
+    await Promise.all(responsePromises);
+
+    // Update trigger with notified responders
+    trigger.respondersNotified = responders.map((r) => r._id);
+    await trigger.save();
+
+    // Populate trigger data
+    const populatedTrigger = await Trigger.findById(trigger._id)
+      .populate("triggeredBy", "name email phone emergencyContacts medicalInfo")
+      .populate("device", "deviceId deviceName deviceType")
+      .populate("respondersNotified", "name phone");
+
+    // Emit socket event to all responders
+    const io = req.app.get("io");
+    io.to("responders").emit("emergency-alert", {
+      trigger: populatedTrigger,
+      message: "New emergency alert from device!",
+      source: "device",
+    });
+
+    res.status(201).json({
+      success: true,
+      message: "Emergency alert triggered successfully from device",
+      data: populatedTrigger,
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: error.message || "Error creating device trigger",
+    });
+  }
+};

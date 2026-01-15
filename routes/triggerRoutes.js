@@ -9,9 +9,11 @@ import {
   updateTriggerStatus,
   cancelTrigger,
   getTriggerStats,
+  createTriggerFromDevice,
 } from "../controllers/triggerController.js";
 import { protect, authorize } from "../middleware/auth.js";
 import { validate } from "../middleware/validator.js";
+import { deviceAuth } from "../middleware/deviceAuth.js";
 
 const router = express.Router();
 
@@ -32,11 +34,33 @@ const createTriggerValidation = [
     .withMessage("Invalid priority level"),
 ];
 
+const deviceTriggerValidation = [
+  body("deviceId").trim().notEmpty().withMessage("Device ID is required"),
+  body("deviceSecret").trim().notEmpty().withMessage("Device secret is required"),
+  body("location.coordinates")
+    .isArray({ min: 2, max: 2 })
+    .withMessage(
+      "Location coordinates must be an array of [longitude, latitude]"
+    ),
+  body("location.coordinates.*")
+    .isFloat()
+    .withMessage("Coordinates must be valid numbers"),
+];
+
 const updateStatusValidation = [
   body("status")
     .isIn(["active", "responded", "resolved", "false_alarm", "cancelled"])
     .withMessage("Invalid status"),
 ];
+
+// Device trigger endpoint (no JWT required - uses common device secret)
+router.post(
+  "/device-trigger",
+  deviceTriggerValidation,
+  validate,
+  deviceAuth,
+  createTriggerFromDevice
+);
 
 // End user routes
 router.post(
